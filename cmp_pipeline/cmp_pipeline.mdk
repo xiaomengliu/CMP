@@ -1,0 +1,615 @@
+# CMP分析流程
+
+##reads 1 和 reads 2 去掉adapter，程序一样，且from 孙静
+
+      perl read1_2_filter_adapter.pl $s.1.clean.fq.gz $s.1.adapter.fq.gz
+
+##reads2 去掉前6bp和12bp后，还要剩余20bp；reads1去掉前12bp和后6bp，还要剩余20bp。
+
+      perl rm_firstx_leny.pl $s.1.adapter.fq.gz $s.2.filter.fq.gz 6 20 12
+
+* 想了一下，去掉前6bp后12bp或者前12bp后6bp的策略是合理的，因为基因组motif显示cgcgcgg中后5bpmapping更好一些，所以去掉前4+2bp，由于片段很短，基本上reads1和reads2是重合的，所以有必要前后都要去掉一定的碱基。但是对于组织样本，是否有必要去掉一定的碱基呢，如果组织片段大，那么就没有必要了吧。对组织的测序为什么不一开始就用RRBS呢？哦，对，因为RRBS和MCTA-Seq覆盖位点有差异。我觉得应该衡量一下切胶片段大小对结果的影响，同一个组织切不同长短，上机测序，看看结果有没有异同，如果相关性很好，那么就没有必要纠结长短了；如果切长一些更好，那么组织的去掉前xbp后xbp的策略可能需要修改
+
+##去掉reads中含有3个或以上CpH的序列
+
+      perl ch3deleate.pl $2.2.filter.fq.gz $s.2.nonCG.fq.gz
+
+* perl很简单，reads匹配三个或三个以上CA/CT/CC就删掉
+* 其实这步没有将CH去完，只去掉序列中的CH；noch_arra去掉了比对到reference的CH
+
+##bismark比对
+
+##noch_arra
+
+##（1）在xx范围内含有至少2个CG；（2）reads1 barcode区域的质量值控制；（3）barcode一样的reads仅保留一个  
+
+（1）在xx范围内含有至少2个CG
+
+* 目的：筛选在-3~+3bp（含3bp）（mapping位点为0）中至少有2个CG的序列  
+* 输入文件：$s.temp2  
+* 结果文件：$s.5bp.cgcgmat.gz
+
+```
+perl extractCGx2.pl $s.temp2 hg19.fa $s.5bp.cgcgmat.gz
+$samtools view $s.2.nonCG.fq.gz_bismark.sort.bam > $s.5temp2
+```
+
+（2）reads1 barcode区域的质量值控制
+
+* 目的：barcode区域中每个碱基的质量值大于等于17
+* 测序得到第一链如下，H至少有5个，所以将前5个H作为barcode,作为barcode的5个碱基质量值要大于等于17
+
+TTTCCCTACACGACGCTCTTCCGATCTHHHHHHHHCGCH
+TTTCCCTACACGACGCTCTTCCGATCTHHHHHHHCGHCH
+TTTCCCTACACGACGCTCTTCCGATCTHHHHHHCGHHCH
+TTTCCCTACACGACGCTCTTCCGATCTHHHHHCGHHHCH
+
+    perl qc5bp.pl $s.clean.1.fq.gz 5 $s.5qc.gz
+
+（3）、barcode一样的reads仅保留一个
+
+* 目的：如果read1没有比对上基因组，则只考虑reads1的barcode以及reads2的起始位置，一致，则认为是同一条reads。若read1和read2的比对信息都有，则考虑reads1的barcode、reads1的起始位置以及reads2的起始位置，一致，则认为是同一条reads
+* 输入文件：$s.5temp1
+* 输出文件：$s.5bp.cgcgmat.rmd.gz  
+``
+perl rmduppcrv2.pl \$s.5qc.gz \$s.5bp.cgcgmat.gz 5 \$s.5temp1 \$s.5bp.cgcgmat.rmd.gz
+``
+
+##用$s.5bp.cgcgmat.gz得到noch_arra
+重复1.5、noch_arra 过程，输入文件为$s.5bp.cgcgmat.gz
+
+#CMP部分文件说明
+##生成文件说明
+``
+s07.Pcgibed:$s.5bp.cgcgmat.rmd.gz
+s07.Tcgibed:$s.5bp.cgcgmat.gz
+``
+uP-xxx:对于血浆样本，在MePM基础上乘以 qc-dCGI-$s/rmd-dCGI-$s
+
+P和T的差别在于P算的UMI，T算的MePM
+
+##cal文件内容说明
+**fmg9_m.clean：**
+clean reads 条数  
+**fmg9_m.qc5.clean：**
+对clean reads再次做前5bp的qc后的reads  
+**fmg9_m.filter：**去掉前6bp后12bp后剩余的reads数  
+**fmg9_m.rmfilter：**去掉含有3个及以上nonCG的reads  
+**fmg9_m.unique_mapping：**bismark mapping到基因组  
+**fmg9_m.cgcgmat：**在-3~+3bp（含3bp）（mapping位点为0）中至少有2个CG  
+**fmg9_m.cgcgmat.qc：**在fmg9_m.cgcgmat的基础上，reads的前5bp做过qc  
+**fmg9_m.cgcgmat.qc.rmd：**用UMI去掉PCR重复序列  
+**P-CGI-fmg9_m：**用UMI去掉PCR重复后落在CGI中的序列  
+**T-CGI-fmg9_m：**不用UMI去掉PCR重复后落在CGI中的序列  
+**qc-dCGI-fmg9_m：**qc前5bp，落在dCGI区域中的reads(dCGI有3024个，分别是什么
+呢？)  
+**qc-dCGI2-fmg9_m：**qc前5bp，落在dCGI2区域中的reads(dCGI2有9513个，分别是
+什么呢？)  
+**rmd-dCGI-fmg9_m：**qc前5bp，去掉UMI，落在dCGI中的reads  
+**rmd-dCGI2-fmg9_m：**qc前5bp，去掉UMI，落在dCGI2中的reads  
+**filter2_nonCGfmg9_m：**1-（"total methylated C in CHG"+"total methylated 
+C in CHH" ）/("total methylated C in CHG"+"total methylated C in 
+CHH" +"total C to T conversions in CHG context"+"Total C to T 
+conversions in CHH context")）完成filter而未去掉含3个及以上nonCG的第二端序列然后bismark比对结果  
+**filter1_nonCGfmg9_m ：**同上，第一端序列  
+
+
+
+#CMP改进流程
+##单位点C和C+T衡量甲基化程度
+不光用MePM衡量甲基化程度，还用测到reads含有的甲基化位点的C/C+T来衡量。
+一个小问题：是否应该同时考虑reads1和reads2的信息，为了解决这个问题，
+应该计算reads1和reads2重叠区域是否很多，如果基本上重复，那么reads1和
+reads2的信息是一致的，仅需要考虑一条reads即可，如果reads1和reads2重叠
+区域少，那么应该同时考虑两条reads的情况。这样计算有点麻烦，因为不能分别
+把reads1和reads2的C加起来，C+T加起来，然后C/C+T，原因是这样会导致重叠
+区域权重增大，应该是上述的C-重叠区域C，上述C+T-重叠区域C+T，然后C/C+T
+才是真的甲基化程度。所以我觉得考虑一条reads足以。
+
+***
+**1. read1_2_filter_adapter.pl**
+
+```
+  1 #! /usr/bin/perl -w
+  2 use strict;
+  3
+  4 open IN,"zcat $ARGV[0] |" or die $!;
+  5 open OUT,"|gzip > $ARGV[1]" or die $!;
+  6
+  7 while(<IN>)
+  8 {
+  9         chomp;
+ 10         my $line1=$_;
+ 11         chomp(my $line2=<IN>);
+ 12         #<IN>;
+ 13         chomp(my $line3=<IN>);
+ 14         chomp(my $line4=<IN>);
+ 15         if($line2 =~ /^(\w+)AGATCGGAAGAGC/)
+ 16         {
+ 17                 #$line2= s/AGATCGGAAGAGCAC//;
+ 18                 #my $len = length($1)
+ 19                 if(length($1)>2)
+ 20                 {
+ 21                         my $len = length($1);
+ 22                         my $new_line2=substr($line2,0,$len);
+ 23                         #my $line2_length= length $line2;
+ 24                         my $new_line4=substr($line4,0,$len);
+ 25                         print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 26                 }
+ 27         }
+ 28         elsif($line2 =~ /^AGATCGGAAGAGCAC/)
+ 29         {
+ 30                 next;
+ 31         }
+ 32         #elsif($line2 =~ /^(\w+)AGATCGGAAGAGCA$/)
+ 33         #{
+ 34         #       #$line2= s/AGATCGGAAGAGCA$//;
+ 35         #       my $len = length($1);
+ 36         #       my $new_line2=substr($line2,0,$len);
+ 37         #       my $new_line1=substr($line1,0,$len);
+ 38         ##      print OUT "$new_line1\n$new_line2\n\n";
+ 39         #}
+ 40         elsif($line2 =~ /^(\w+)AGATCGGAAGAGC$/)
+ 41         {
+ 42                 #$line2= s/AGATCGGAAGAGC$//;
+ 43                 my $len = length($1);
+ 44                 my $new_line2=substr($line2,0,$len);
+ 45                 my $new_line4=substr($line4,0,$len);
+ 46         #       print OUT "$new_line1\n$new_line2\n\n";
+ 47                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 48         }
+ 49         elsif($line2 =~ /^(\w+)AGATCGGAAGAG$/)
+ 50         {
+ 51                 #$line2= s/AGATCGGAAGAG$//;
+ 52                 my $len = length($1);
+ 53                 my $new_line2=substr($line2,0,$len);
+ 54                 my $new_line4=substr($line4,0,$len);
+ 55                 #print OUT "$new_line1\n$new_line2\n\n";
+ 56                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 57         }
+ 58         elsif($line2 =~ /^(\w+)AGATCGGAAGA$/)
+ 59         {
+ 60                 #$line2= s/AGATCGGAAGA$//;
+ 61                 my $len = length($1);
+ 62                 my $new_line2=substr($line2,0,$len);
+ 63                 my $new_line4=substr($line4,0,$len);
+ 64                 #print OUT "$new_line1\n$new_line2\n\n";
+ 65                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 66         }
+ 67         elsif($line2 =~ /^(\w+)AGATCGGAAG$/)
+ 68         {
+ 69                 #$line2= s/AGATCGGAAG$//;
+ 70                 my $len = length($1);
+ 71                 my $new_line2=substr($line2,0,$len);
+ 72                 my $new_line4=substr($line4,0,$len);
+ 73 #               print OUT "$new_line1\n$new_line2\n\n";
+ 74                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 75         }
+ 76         elsif($line2 =~ /^(\w+)AGATCGGAA$/)
+ 77         {
+ 78                 #$line2= s/AGATCGGAA$//;
+ 79                 my $len = length($1);
+ 80                 my $new_line2=substr($line2,0,$len);
+ 81                 my $new_line4=substr($line4,0,$len);
+ 82                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 83 #               print OUT "$new_line1\n$new_line2\n\n";
+ 84         }
+ 85         elsif($line2 =~ /^(\w+)AGATCGGA$/)
+ 86         {
+ 87                 #$line2= s/AGATCGGA$//;
+ 88                 #my $line2_length= length $line2;
+ 89                 my $len = length($1);
+ 90                 my $new_line2=substr($line2,0,$len);
+ 91                 my $new_line4=substr($line4,0,$len);
+ 92                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+ 93 #               print OUT "$new_line1\n$new_line2\n\n";
+ 94         }
+ 95         elsif($line2 =~ /^(\w+)AGATCGG$/)
+ 96         {
+ 97                 #$line2= s/AGATCGG$//;
+ 98                 #my $line2_length= length $line2;
+ 99                 my $len = length($1);
+100                 my $new_line2=substr($line2,0,$len);
+101                 my $new_line4=substr($line4,0,$len);
+102 #               print OUT "$new_line1\n$new_line2\n\n";
+103                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+104         }
+105         elsif($line2 =~ /^(\w+)AGATCG$/)
+106         {
+107                 #$line2= s/AGATCG$//;
+108                 #my $line2_length= length $line2;
+109                 my $len = length($1);
+110                 my $new_line2=substr($line2,0,$len);
+111                 my $new_line4=substr($line4,0,$len);
+112                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+113 #               print OUT "$new_line1\n$new_line2\n\n";
+114         }
+115         elsif($line2 =~ /^(\w+)AGATC$/)
+116         {
+117                 #$line2= s/AGATC$//;
+118                 #my $line2_length= length $line2;
+119                 my $len = length($1);
+120                 my $new_line2=substr($line2,0,$len);
+121                 my $new_line4=substr($line4,0,$len);
+122         #       print OUT "$new_line1\n$new_line2\n\n";
+123                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+124         }
+125         elsif($line2 =~ /^(\w+)AGAT$/)
+126
+127         {
+128                  #$line2= s/AGAT$//;
+129                 #my $line2_length= length $line2;
+130                 my $len = length($1);
+131                 my $new_line2=substr($line2,0,$len);
+132                 my $new_line4=substr($line4,0,$len);
+133 #               print OUT "$new_line1\n$new_line2\n\n";
+134                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+135         }
+136         elsif($line2 =~ /^(\w+)AGA$/)
+137         {
+138                 #$line2= s/AGA$//;
+139                 #my $line2_length= length $line2;
+140                 my $len = length($1);
+141                 my $new_line2=substr($line2,0,$len);
+142                 my $new_line4=substr($line4,0,$len);
+143 #               print OUT "$new_line1\n$new_line2\n\n";
+144                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+145         }
+146         elsif($line2 =~ /^(\w+)AG$/)    #以AG结尾则去掉AG
+147         {
+148                 #$line2= s/AG$//;
+149                 #my $line2_length= length $line2;
+150                 my $len = length($1);
+151                 my $new_line2=substr($line2,0,$len);
+152                 my $new_line4=substr($line4,0,$len);
+153                 print OUT "$line1\n$new_line2\n$line3\n$new_line4\n";
+154 #               print OUT "$new_line1\n$new_line2\n\n";
+155         }
+156         else
+157         {
+158                 print OUT "$line1\n$line2\n$line3\n$line4\n";
+159         }
+160 }
+161 close IN;
+162 close OUT;
+
+```
+
+***
+**2.rm_firstx_leny.pl**
+
+```
+#! /usrt/bin/perl -w
+use strict;
+
+# remove forward xbp, backward zbp, remain more than ybp
+my $usage = "perl $0 <IN1> <OUT> x y z";
+die $usage unless @ARGV==5;
+open IN,"zcat $ARGV[0] |" or die $!;
+open OUT,"| gzip > $ARGV[1]" or die $!;
+while(<IN>)
+{
+        chomp;
+        my $line1=$_;
+        chomp(my $line2=<IN>);
+        chomp(my $line3=<IN>);
+        chomp(my $line4=<IN>);
+        my $len_2=length($line2);
+        if($len_2 >=$ARGV[2]+$ARGV[4]+$ARGV[3])  #大于或等于6+12+20（38）
+        {
+                my $second=substr($line2,$ARGV[2],$len_2-$ARGV[2]-$ARGV[4]);
+                my $line4_1=substr($line4,$ARGV[2],$len_2-$ARGV[2]-$ARGV[4]);
+                my $len=length($second);
+                #my $third=substr($second,0,$len_2-24);
+                #my $line4_2=substr($line4_1,0,$len_2-24);
+                print OUT "$line1\n$second\n$line3\n$line4_1\n";
+        }
+        else
+        {
+                next;
+        }
+}
+close IN;
+close OUT;
+```
+
+***
+**3.ch3deleate.pl**
+
+```
+  1 #!/usr/bin/perl
+  2 use strict;
+  3 use warnings;
+  4
+  5 my ($line1,$line2,$line3,$line4,$count);
+  6 open IN,"zcat $ARGV[0]|" or die $!;
+  7 open OUT,"| gzip > $ARGV[1]" or die $!;
+  8 while (<IN>)
+  9 {
+ 10         $count=0;
+ 11         chomp;
+ 12         $line1 = $_;
+ 13         chomp($line2=<IN>);
+ 14         chomp($line3=<IN>);
+ 15         chomp($line4=<IN>);
+ 16         while ($line2 =~m/CA/g)  #从建库方法来看，第二链不会有TG这种情况
+ 17         {
+ 18                 $count++;
+ 19         }
+ 20         while ($line2 =~m/CT/g)
+ 21         {
+ 22                 $count++;
+ 23         }
+ 24         while ($line2 =~m/CC/g)
+ 25         {
+ 26                 $count++;
+ 27         }
+ 28         next if ($count >= 3);
+ 29         print OUT "$line1\n$line2\n$line3\n$line4\n";
+ 30 }
+ 31 close IN;
+```
+
+***
+**4.s05.noch_arrange**
+
+```
+109 out=\$dir/\${f}_\${b}trim/s05.noch_arrange/\$s
+110 for i in {1..22} X Y
+111 do
+112  c=chr\$i
+113  ff=\$f
+114  bb=\$b
+115  sbam2=\$dir/\${ff}_\${bb}trim/s04.align/\$s/\$s.2.nonCG.fq.gz_bismark.sort.bam
+116  log=\$dir/\${ff}_\${bb}trim/s05.noch_arrange/\$s/\$c.log
+117  outout=\$dir/\${ff}_\${bb}trim/s05.noch_arrange/\$s
+118
+119 touch \$shell/\$c.ing... && \\
+120 \$samtools view -h \$sbam2 \$c\\
+121 |perl -ne 'print \$_ and next if /^@/;my \$met = \$1 if/XM:Z:(\S+)/;next if (\$met =~tr/HX/HX/)>=3;print \    $_'\\
+122 |perl \$dirperl/samStat.pl /dev/stdin \$log \\
+123 |\$samtools view -uSb /dev/stdin \\
+124 |\$samtools mpileup -f \$database/hg19/DNA_fa/\$c.fa /dev/stdin \\
+125 |perl \$dirperl/covStrBed.pl /dev/stdin \$outout 1 \\
+126 |perl \$dirperl/covStrBed.pl /dev/stdin \$outout 3 \\
+127 |perl \$dirperl/modCytSplt.pl \$database/hg19/dbSNP/human_build_137/vcf_by_chromosome/CHB/processed_data/\    $c.gz \$database/hg19/DNA_fa/\$c.fa  \\
+128 /dev/stdin \$outout/\$c. >/dev/null && \\
+129 mv \$shell/\$c.ing... \$shell/\$c.ok
+130 done
+131
+132 for i in {1..22} X Y
+133 do
+134 zcat \$out/chr\$i.CG.gz|awk '{if (\$9==\".\")print \$1\"\\t\"\$2-1\"\\t\"\$2\"\\t\"\$3\"\\t\"\$4\"\\t\"\$5    \"\\t\"\$6}' - > \$out/chr\$i.CG
+135 done
+136 cat \$out/chr*.CG > \$out/all.CG
+137
+138 for i in {1..22} X Y
+139 do
+140 zcat \$out/chr\$i.CHG.gz|awk '{if (\$9==\".\")print \$1\"\\t\"\$2-1\"\\t\"\$2\"\\t\"\$3\"\\t\"\$4\"\\t\"\$    5\"\\t\"\$6}' - > \$out/chr\$i.CHG
+141 zcat \$out/chr\$i.CHH.gz|awk '{if (\$9==\".\")print \$1\"\\t\"\$2-1\"\\t\"\$2\"\\t\"\$3\"\\t\"\$4\"\\t\"\$    5\"\\t\"\$6}' - > \$out/chr\$i.CHH
+142 perl \$dirperl/sorcharacter.pl \$out/chr\$i.CHG > \$out/chr\$i.CHG.sort
+143 perl \$dirperl/sorcharacter.pl \$out/chr\$i.CHH > \$out/chr\$i.CHH.sort
+144 done
+145 cat \$out/chr*.CHG.sort \$out/chr*.CHH.sort > \$out/all.nonCG
+146 rm \$out/chr*
+147 rm \$dir/\${f}_\${b}trim/s05.noch_arrange/\${s}chr*.cov*.bed
+148 echo s05done
+```
+
+***
+**5.extractCGx2.pl**
+```
+  1 #!/usr/bin/perl
+  2 use strict;
+  3 use warnings;
+  4
+  5 my $usage = "perl $0 <IN1> <IN2> <OUT>
+  6 <IN1>:bam file;reads_name flag chr1 pos 255 74M * 0 0 TTTTTTTTTTTTTTT ############## ...(not imp    ortant)
+  7 <IN2>:fasta(hg19)
+  8 <OUT>:bam file;reads_name flag chr1 pos 255 74M * 0 0 TTTTTTTTTTTTTTT ############## ...(not imp    ortant)(delete some reads)";
+  9 die $usage unless @ARGV==3;
+ 10 my ($id,$seq,%hash2,$len,$end1,$str1,$i);
+ 11 open OUT,"|gzip >  $ARGV[2]" or die $!;
+ 12 open IN1,"<$ARGV[1]" or die $!;
+ 13 $/=">";
+ 14 while (<IN1>)
+ 15 {
+ 16         if ($_=~/(chr.*?)\s(.*)/ms)
+ 17         {
+ 18                 $id = $1;
+ 19                 $seq = $2;
+ 20                 $seq =~s/\s//g;
+ 21                 $hash2{$id} = $seq;
+ 22         }
+ 23 }
+ 24 close IN1;
+ 25
+ 26 $/="\n";
+ 27 open IN2,"<$ARGV[0]" or die $!;
+ 28 while (<IN2>)
+ 29 {
+ 30         $i=0;
+ 31         chomp;
+ 32         my @a = split;
+ 33         if ($a[1] == 16 )
+ 34         {
+ 35                 $len = length($a[10]);
+ 36                 $end1 = $a[3]+$len+2;
+ 37                 $str1 = $end1-7;
+ 38                 while (substr($hash2{$a[2]},$str1,7)=~/GC/ig)
+ 39                 {
+ 40                         $i++;
+ 41                 }
+ 42         }
+ 43         if ($a[1]==0)
+ 44         {
+ 45                 $str1 = $a[3]-1-3;
+ 46                 while (substr($hash2{$a[2]},$str1,7)=~/CG/ig)
+ 47                 {
+ 48                         $i++;
+ 49                 }
+ 50         }
+ 51         if ($i>=2)
+ 52         {
+ 53                 print OUT "$_\n";
+ 54         }
+ 55 }
+ 56 close IN2;
+```
+***
+
+**6.qc5bp.pl**
+```
+  1 #!/usr/bin/perl
+  2 use strict;
+  3 use warnings;
+  4
+  5 my $usage = "perl $0 <IN1> <IN2> <OUT>
+  6 <IN1>:clean_data
+  7 <IN2>:5 (or 10)
+  8 <OUT>:clean_data_5bpqc,if 5bp or 10bp phred score >= 20,retain";
+  9 die $usage unless @ARGV==3;
+ 10
+ 11 my ($asc,$i,$j);
+ 12 open IN1,"zcat $ARGV[0]|" or die $!;
+ 13 open OUT,"|gzip > $ARGV[2]" or die $!;
+ 14 while (<IN1>)
+ 15 {
+ 16         chomp;
+ 17         my $line1 = $_;
+ 18         chomp(my $line2=<IN1>);
+ 19         chomp(my $line3=<IN1>);
+ 20         chomp(my $line4=<IN1>);
+ 21         if ($line1=~/@(.*?)\s/)
+ 22         {
+ 23                 $j = 0;
+ 24                 for ($i=1;$i<=$ARGV[1];$i++)
+ 25                 {
+ 26                         my $s = substr($line4,$i,1);
+ 27                         if (ord($s)>=50)  #按照phred33系统，50-33=17，大于等于17哦
+ 28                         {
+ 29                                 $j++;
+ 30                         }
+ 31                 }
+ 32                 if ($j == 5 )
+ 33                 {
+ 34                         print OUT "$line1\n$line2\n$line3\n$line4\n";
+ 35                 }
+ 36         }
+ 37 }
+ 38 close IN1;
+```
+***
+
+**7.rmduppcrv2.pl**
+```
+    1 #!/usr/bin/perl
+  2 use strict;
+  3 use warnings;
+  4
+  5 my $usage = "perl $0 <IN1> <IN2> <IN3> <IN4> <OUT>
+  6 <IN1>:clean_data
+  7 <IN2>:bam2
+  8 <IN3>:5bp or 10bp;
+  9 <IN4>;bam1
+ 10 <OUT>:bam.txt";
+ 11 die $usage unless @ARGV==5;
+ 12 my (%bam,%rmdup,%seq,%pos,%pos2,$i,$end);#$end is the right-most coordinate of bam reads
+ 13 open IN1,"zcat $ARGV[0] |" or die $!;
+ 14 open OUT,"|gzip > $ARGV[4]" or die $!;
+ 15 while (<IN1>)  # for barcode quality
+ 16 {
+ 17         chomp;
+ 18         my $line1 = $_;
+ 19         chomp(my $line2=<IN1>);
+ 20         chomp(my $line3=<IN1>);
+ 21         chomp(my $line4=<IN1>);
+ 22         if ($line1=~/@(.*?)\s/)
+ 23         {
+ 24                 my $s = substr($line2,0,$ARGV[2]); #extract barcode in reads1
+ 25                 my $key = $1;# read name
+ 26                 $seq{$key} = $s; # barcode <- read_name1
+ 27         }
+ 28 }
+ 29 close IN1;
+ 30 open IN2,"zcat $ARGV[1] |" or die $!;
+ 31 while (<IN2>)
+ 32 {
+ 33         chomp;
+ 34         my @a = split;
+ 35         if ($_=~/(.*?)_/)
+ 36         {
+ 37                 my $key = $1;# read_name2
+ 38                 $end=$a[3]+length($a[9]);# end position
+ 39                 if ($a[1]==0)
+ 40                 {
+ 41                         $pos{$key} = "$a[2]\t$a[3]"; #chr&start <- read_name2
+ 42                 }
+ 43                 if ($a[1]==16)
+ 44                 {
+ 45                         $pos{$key} = "$a[2]\t$end"; #chr&end <- read_name2
+ 46                 }
+ 47         }
+ 48 }
+ 49 close IN2;
+ 50 open IN4,"<$ARGV[3]" or die $!;
+ 51 while (<IN4>)
+ 52 {
+ 53         chomp;
+ 54         my @a = split;
+ 55         if ($_=~/(.*?)_/)
+ 56         {
+ 57                 my $key = $1;# read_name1
+ 58                 $end=$a[3]+length($a[9]);# end position
+ 59                 if ($a[1]==0)
+ 60                 {
+ 61                         $pos2{$key} = "$a[2]\t$a[3]"; #chr&str <- read_name1
+ 62                 }
+ 63                 if ($a[1]==16)
+ 64                 {
+ 65                         $pos2{$key} = "$a[2]\t$end"; #chr&end <- read_name1
+ 66                 }
+ 67         }
+ 68 }
+ 69
+ 70 foreach my $key (keys %pos) #number of keys of %seq is more than that of %pos, for bamfile only contains t    he reads that mapped on the genome;as it is sorted by %pos's key, if there is a seqid that can only be fou    nd in %pos, but not in %seq, this id will be printed in final results, and there will be an error reported    . But this situation won't happen, for %seq contains id in %pos.
+ 71 {
+ 72         next if (not exists $seq{$key}); # 5qc clean data.Discard reads with low quality
+ 73         if (not exists $pos2{$key})
+ 74         {
+ 75                 $i=0;
+ 76                 my $item = "$seq{$key}\t$pos{$key}\t$i";  #barcode,read2_chromosome,read2_start_coordinate    ,0 。如果read1没有比对信息，则只考虑reads1的barcode以及reads2的起始位置，一致，则认为是同一条reads
+ 77                 $rmdup{$item} = $key; #read name <- barcode,read2_chromosome,read2_start_coordinate
+ 78         }
+ 79         else
+ 80         {
+ 81                 my $item = "$seq{$key}\t$pos{$key}\t$pos2{$key}"; #barcode,read2_chromosome,read2_start_co    ordinate,read1_chromosome,read1_start_coordinate 。若read1和read2的比对信息都有，则考虑reads1的barcode、reads1的起始位置以及reads2的起始位置，一致，则认为是同一条reads
+ 82                 $rmdup{$item} = $key; #read2name <- barcode&chr&str;key is xbp seq and position of the seq    id without pcr duplication, value is the seqid without pcr duplication;
+ 83         }
+ 84 }
+ 85 undef %seq;
+ 86 undef %pos;
+ 87 undef %pos2;
+ 88
+ 89 open IN2,"zcat $ARGV[1]|" or die $!; # read bam file again, print reads without pcr duplication in bam.txt     format;
+ 90 while (<IN2>)
+ 91 {
+ 92         chomp;
+ 93         my @a = split;
+ 94         if ($_=~/(.*?)_/)
+ 95         {
+ 96                 my $item = $1;
+ 97                 $bam{$item} = $_; # put bamfile into a hash, key is the seqid, value is the whole informat    ion from bam file;
+ 98         }
+ 99 }
+100 foreach my $id (values %rmdup)
+101 {
+102         print OUT "$bam{$id}\n";
+103 }
+104 close IN2;
+```
+***
+
+
+
+
